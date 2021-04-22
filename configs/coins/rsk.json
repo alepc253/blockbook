@@ -1,0 +1,64 @@
+{
+  "coin": {
+    "name": "RSK",
+    "shortcut": "RSK",
+    "label": "RSK",
+    "alias": "rsk"
+  },
+  "ports": {
+    "backend_rpc": 8097,
+    "backend_message_queue": 0,
+    "backend_p2p": 38397,
+    "backend_http": 8097,
+    "blockbook_internal": 9097,
+    "blockbook_public": 9197
+  },
+  "ipc": {
+    "rpc_url_template": "ws://127.0.0.1:{{.Ports.BackendRPC}}",
+    "rpc_timeout": 25
+  },
+  "backend": {
+    "package_name": "backend-rsk",
+    "package_revision": "satoshilabs-1",
+    "system_user": "rsk",
+    "version": "2.2.0",
+    "binary_url": "https://github.com/rsksmart/rskj/releases/download/PAPYRUS-2.2.0/rskj-core-2.2.0-PAPYRUS-all.jar",
+    "verification_type": "sha256",
+    "verification_source": "f7cb1e6c5568332d047c602a5b2c464c41688336b824d92ef3a40b89a8f55b60",
+    "extract_command": "",
+    "exclude_files": [],
+    "exec_command_template": "/bin/sh -c '{{.Env.BackendInstallPath}}/{{.Coin.Alias}}/java  -Ddatabase.dir={{.Env.BackendDataPath}}/{{.Coin.Alias}}/backend -Drpc.providers.web.http.port=4444  -Drpc.providers.web.ws.port={{.Ports.BackendRPC}} -Drpc.providers.web.cors=\"*\" rskj-core-2.2.0-PAPYRUS-all.jar co.rsk.Start 2>>{{.Env.BackendDataPath}}/{{.Coin.Alias}}/backend/{{.Coin.Alias}}.log'",
+    "logrotate_files_template": "{{.Env.BackendDataPath}}/{{.Coin.Alias}}/backend/{{.Coin.Alias}}.log",
+    "postinst_script_template": "",
+    "service_type": "simple",
+    "service_additional_params_template": "",
+    "protect_memory": true,
+    "mainnet": true,
+    "server_config_file": "",
+    "client_config_file": ""
+  },
+  "blockbook": {
+    "package_name": "blockbook-rsk",
+    "system_user": "blockbook-rsk",
+    "internal_binding_template": ":{{.Ports.BlockbookInternal}}",
+    "public_binding_template": ":{{.Ports.BlockbookPublic}}",
+    "explorer_url": "",
+    "additional_params": "",
+    "block_chain": {
+      "parse": true,
+      "mempool_workers": 8,
+      "mempool_sub_workers": 2,
+      "block_addresses_to_keep": 300,
+      "additional_params": {
+        "mempoolTxTimeoutHours": 48,
+        "queryBackendOnMempoolResync": false,
+        "fiat_rates": "coingecko",
+        "fiat_rates_params": "{\"url\": \"https://api.coingecko.com/api/v3\", \"coin\": \"rbtc\", \"periodSeconds\": 60}"
+      }
+    }
+  },
+  "meta": {
+    "package_maintainer": "IT",
+    "package_maintainer_email": "it@satoshilabs.com"
+  }
+}
