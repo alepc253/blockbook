@@ -10,6 +10,7 @@ import (
 	"github.com/juju/errors"
 	"github.com/trezor/blockbook/bchain"
 	"golang.org/x/crypto/sha3"
+	"github.com/golang/glog"
 )
 
 // EthereumTypeAddressDescriptorLen - in case of EthereumType, the AddressDescriptor has fixed length
@@ -25,6 +26,7 @@ type EthereumParser struct {
 
 // NewEthereumParser returns new EthereumParser instance
 func NewEthereumParser(b int) *EthereumParser {
+	glog.Error("RSK NewEthereumParser")
 	return &EthereumParser{&bchain.BaseParser{
 		BlockAddressesToKeep: b,
 		AmountDecimalPoint:   EtherAmountDecimalPoint,
@@ -97,6 +99,14 @@ func ethNumber(n string) (int64, error) {
 }
 
 func (p *EthereumParser) ethTxToTx(tx *rpcTransaction, receipt *rpcReceipt, blocktime int64, confirmations uint32, fixEIP55 bool) (*bchain.Tx, error) {
+	glog.Error("ethTxToTx txid:")
+	glog.Error(tx.Hash)
+	glog.Error("blocktime:")
+	glog.Error(blocktime)
+	glog.Error("confirmations:")
+	glog.Error(confirmations)
+	glog.Error("fixEIP55")
+	glog.Error(fixEIP55)
 	txid := tx.Hash
 	var (
 		fa, ta []string
@@ -121,14 +131,20 @@ func (p *EthereumParser) ethTxToTx(tx *rpcTransaction, receipt *rpcReceipt, bloc
 			}
 		}
 	}
+	glog.Error("tx:")
+	glog.Error(tx)
+	glog.Error("Receipt:")
+	glog.Error(receipt)
 	ct := completeTransaction{
 		Tx:      tx,
 		Receipt: receipt,
 	}
 	vs, err := hexutil.DecodeBig(tx.Value)
 	if err != nil {
+		glog.Error("Error decoding Value")
 		return nil, err
 	}
+	glog.Error("returning tx")
 	return &bchain.Tx{
 		Blocktime:     blocktime,
 		Confirmations: confirmations,

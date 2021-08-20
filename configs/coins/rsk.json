@@ -6,28 +6,29 @@
     "alias": "rsk"
   },
   "ports": {
-    "backend_rpc": 8097,
+    "backend_rpc": 4444,
     "backend_message_queue": 0,
-    "backend_p2p": 38397,
-    "backend_http": 8097,
+    "backend_p2p": 5050,
+    "backend_http": 4444,
     "blockbook_internal": 9097,
     "blockbook_public": 9197
   },
   "ipc": {
-    "rpc_url_template": "ws://127.0.0.1:{{.Ports.BackendRPC}}",
-    "rpc_timeout": 25
+    "rpc_url_template": "http://127.0.0.1:{{.Ports.BackendRPC}}",
+    "ws_url_template": "ws://127.0.0.1:4445/websocket",
+    "rpc_timeout": 60
   },
   "backend": {
     "package_name": "backend-rsk",
     "package_revision": "satoshilabs-1",
     "system_user": "rsk",
-    "version": "2.2.0",
-    "binary_url": "https://github.com/rsksmart/rskj/releases/download/PAPYRUS-2.2.0/rskj-core-2.2.0-PAPYRUS-all.jar",
+    "version": "3.0.0",
+    "binary_url": "https://github.com/rsksmart/rskj/releases/download/IRIS-3.0.0/rskj-core-3.0.0-IRIS-all.jar",
     "verification_type": "sha256",
     "verification_source": "f7cb1e6c5568332d047c602a5b2c464c41688336b824d92ef3a40b89a8f55b60",
-    "extract_command": "",
+    "extract_command": "sh -c 'cp \"$$1\" backend/' fake-extract",
     "exclude_files": [],
-    "exec_command_template": "/bin/sh -c '{{.Env.BackendInstallPath}}/{{.Coin.Alias}}/java  -Ddatabase.dir={{.Env.BackendDataPath}}/{{.Coin.Alias}}/backend -Drpc.providers.web.http.port=4444  -Drpc.providers.web.ws.port={{.Ports.BackendRPC}} -Drpc.providers.web.cors=\"*\" rskj-core-2.2.0-PAPYRUS-all.jar co.rsk.Start 2>>{{.Env.BackendDataPath}}/{{.Coin.Alias}}/backend/{{.Coin.Alias}}.log'",
+    "exec_command_template": "/bin/sh -c 'java -Xmx4G -Xms1024m -Ddatabase.dir={{.Env.BackendDataPath}}/{{.Coin.Alias}}/backend -Drpc.providers.web.http.port={{.Ports.BackendRPC}} -Drpc.providers.web.ws.enabled=true  -Drpc.providers.web.ws.port=4445 -Drpc.providers.web.cors=\"*\" -Dlogback.configurationFile=~/backend/logback.xml -cp {{.Env.BackendInstallPath}}/{{.Coin.Alias}}/rskj-core-3.0.0-IRIS-all.jar co.rsk.Start 2>>{{.Env.BackendDataPath}}/{{.Coin.Alias}}/backend/{{.Coin.Alias}}.log'",
     "logrotate_files_template": "{{.Env.BackendDataPath}}/{{.Coin.Alias}}/backend/{{.Coin.Alias}}.log",
     "postinst_script_template": "",
     "service_type": "simple",
@@ -53,7 +54,7 @@
         "mempoolTxTimeoutHours": 48,
         "queryBackendOnMempoolResync": false,
         "fiat_rates": "coingecko",
-        "fiat_rates_params": "{\"url\": \"https://api.coingecko.com/api/v3\", \"coin\": \"rbtc\", \"periodSeconds\": 60}"
+        "fiat_rates_params": "{\"url\": \"https://api.coingecko.com/api/v3\", \"coin\": \"rootstock\", \"periodSeconds\": 60}"
       }
     }
   },

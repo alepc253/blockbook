@@ -8,11 +8,11 @@ import (
 	"strconv"
 	"sync"
 	"time"
+	"strings"
 
 	ethereum "github.com/ethereum/go-ethereum"
 	ethcommon "github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
-	ethtypes "github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/ethclient"
 	"github.com/ethereum/go-ethereum/rpc"
 	"github.com/golang/glog"
@@ -36,6 +36,7 @@ type Configuration struct {
 	CoinName                    string `json:"coin_name"`
 	CoinShortcut                string `json:"coin_shortcut"`
 	RPCURL                      string `json:"rpc_url"`
+	WSURL                       string `json:"ws_url_template"`
 	RPCTimeout                  int    `json:"rpc_timeout"`
 	BlockAddressesToKeep        int    `json:"block_addresses_to_keep"`
 	MempoolTxTimeoutHours       int    `json:"mempoolTxTimeoutHours"`
@@ -47,14 +48,16 @@ type EthereumRPC struct {
 	*bchain.BaseChain
 	client               *ethclient.Client
 	rpc                  *rpc.Client
+	wsclient             *ethclient.Client
+	wsrpc	             *rpc.Client
 	timeout              time.Duration
 	Parser               *EthereumParser
 	Mempool              *bchain.MempoolEthereumType
 	mempoolInitialized   bool
 	bestHeaderLock       sync.Mutex
-	bestHeader           *ethtypes.Header
+	bestHeader           *RSKHeader
 	bestHeaderTime       time.Time
-	chanNewBlock         chan *ethtypes.Header
+	chanNewBlock         chan *RSKHeader
 	newBlockSubscription *rpc.ClientSubscription
 	chanNewTx            chan ethcommon.Hash
 	newTxSubscription    *rpc.ClientSubscription
@@ -63,42 +66,60 @@ type EthereumRPC struct {
 
 // NewRSKRPC returns new RSKRPC instance.
 func NewRSKRPC(config json.RawMessage, pushHandler func(bchain.NotificationType)) (bchain.BlockChain, error) {
+	glog.Error("NewRSKRPC")
 	var err error
 	var c Configuration
 	err = json.Unmarshal(config, &c)
 	if err != nil {
 		return nil, errors.Annotatef(err, "Invalid configuration file")
 	}
+	//TODO: make it work from config
+	c.WSURL = "ws://localhost:4445/websocket"
 	// keep at least 100 mappings block->addresses to allow rollback
 	if c.BlockAddressesToKeep < 100 {
 		c.BlockAddressesToKeep = 100
 	}
 
+	glog.Error("openRPC")
 	rc, ec, err := openRPC(c.RPCURL)
 	if err != nil {
 		return nil, err
 	}
 
+	glog.Error("openRPC for WS")
+	wsrc, wsec, wserr := openRPC(c.WSURL)
+	if wserr != nil {
+		return nil, wserr
+	}
+
+	glog.Error("EthereumRPC")
 	s := &EthereumRPC{
 		BaseChain:   &bchain.BaseChain{},
 		client:      ec,
 		rpc:         rc,
 		ChainConfig: &c,
+		wsclient:    wsec,
+		wsrpc:       wsrc,
 	}
 
+	glog.Error("Create parser")
 	// always create parser
 	s.Parser = NewEthereumParser(c.BlockAddressesToKeep)
 	s.timeout = time.Duration(c.RPCTimeout) * time.Second
 
 	// new blocks notifications handling
 	// the subscription is done in Initialize
-	s.chanNewBlock = make(chan *ethtypes.Header)
+	glog.Error("chanNewBlock")
+	s.chanNewBlock = make(chan *RSKHeader)
 	go func() {
 		for {
 			h, ok := <-s.chanNewBlock
 			if !ok {
+				glog.Error("chanNewBlock not ok")
 				break
 			}
+			glog.Error("new block header:")
+			glog.Error(h.Number)
 			glog.V(2).Info("rpc: new block header ", h.Number)
 			// update best header to the new header
 			s.bestHeaderLock.Lock()
@@ -110,6 +131,7 @@ func NewRSKRPC(config json.RawMessage, pushHandler func(bchain.NotificationType)
 		}
 	}()
 
+	glog.Error("chanNewTx")
 	// new mempool transaction notifications handling
 	// the subscription is done in Initialize
 	s.chanNewTx = make(chan ethcommon.Hash)
@@ -117,11 +139,14 @@ func NewRSKRPC(config json.RawMessage, pushHandler func(bchain.NotificationType)
 		for {
 			t, ok := <-s.chanNewTx
 			if !ok {
+				glog.Error("chanNewTx not ok")
 				break
 			}
 			hex := t.Hex()
+			glog.Error("new tx:")
+			glog.Error(hex)
 			if glog.V(2) {
-				glog.Info("rpc: new tx ", hex)
+				glog.Error("rpc: new tx ", hex)
 			}
 			s.Mempool.AddTransactionToMempool(hex)
 			pushHandler(bchain.NotificationNewTx)
@@ -132,20 +157,26 @@ func NewRSKRPC(config json.RawMessage, pushHandler func(bchain.NotificationType)
 }
 
 func openRPC(url string) (*rpc.Client, *ethclient.Client, error) {
+	glog.Error("openRPC url:")
+	glog.Error(url)
 	rc, err := rpc.Dial(url)
 	if err != nil {
 		return nil, nil, err
 	}
+	glog.Error("NewClient")
 	ec := ethclient.NewClient(rc)
 	return rc, ec, nil
 }
 
 // Initialize initializes ethereum rpc interface
 func (b *EthereumRPC) Initialize() error {
+	glog.Error("Initialize")
 	ctx, cancel := context.WithTimeout(context.Background(), b.timeout)
 	defer cancel()
 
 	id, err := b.client.NetworkID(ctx)
+	glog.Error("id:")
+	glog.Error(id.Uint64())
 	if err != nil {
 		return err
 	}
@@ -153,17 +184,19 @@ func (b *EthereumRPC) Initialize() error {
 	// parameters for getInfo request
 	switch EthereumNet(id.Uint64()) {
 	case MainNet:
+		glog.Error("livenet")
 		b.Testnet = false
 		b.Network = "livenet"
 		break
 	case TestNet:
+		glog.Error("testnet")
 		b.Testnet = true
 		b.Network = "testnet"
 		break
 	default:
 		return errors.Errorf("Unknown network id %v", id)
 	}
-	glog.Info("rpc: block chain ", b.Network)
+	glog.Error("rpc: block chain ", b.Network)
 
 	return nil
 }
@@ -172,7 +205,7 @@ func (b *EthereumRPC) Initialize() error {
 func (b *EthereumRPC) CreateMempool(chain bchain.BlockChain) (bchain.Mempool, error) {
 	if b.Mempool == nil {
 		b.Mempool = bchain.NewMempoolEthereumType(chain, b.ChainConfig.MempoolTxTimeoutHours, b.ChainConfig.QueryBackendOnMempoolResync)
-		glog.Info("mempool created, MempoolTxTimeoutHours=", b.ChainConfig.MempoolTxTimeoutHours, ", QueryBackendOnMempoolResync=", b.ChainConfig.QueryBackendOnMempoolResync)
+		glog.Error("mempool created, MempoolTxTimeoutHours=", b.ChainConfig.MempoolTxTimeoutHours, ", QueryBackendOnMempoolResync=", b.ChainConfig.QueryBackendOnMempoolResync)
 	}
 	return b.Mempool, nil
 }
@@ -180,14 +213,17 @@ func (b *EthereumRPC) CreateMempool(chain bchain.BlockChain) (bchain.Mempool, er
 // InitializeMempool creates subscriptions to newHeads and newPendingTransactions
 func (b *EthereumRPC) InitializeMempool(addrDescForOutpoint bchain.AddrDescForOutpointFunc, onNewTxAddr bchain.OnNewTxAddrFunc, onNewTx bchain.OnNewTxFunc) error {
 	if b.Mempool == nil {
+		glog.Error("Mempool not created")
 		return errors.New("Mempool not created")
 	}
 
+	glog.Error("GetMempoolTransactions")
 	// get initial mempool transactions
 	txs, err := b.GetMempoolTransactions()
 	if err != nil {
 		return err
 	}
+	glog.Error("AddTransactionToMempool")
 	for _, txid := range txs {
 		b.Mempool.AddTransactionToMempool(txid)
 	}
@@ -195,7 +231,9 @@ func (b *EthereumRPC) InitializeMempool(addrDescForOutpoint bchain.AddrDescForOu
 	b.Mempool.OnNewTxAddr = onNewTxAddr
 	b.Mempool.OnNewTx = onNewTx
 
+	glog.Error("subscribeEvents")
 	if err = b.subscribeEvents(); err != nil {
+		glog.Error("error subscribeEvents")
 		return err
 	}
 
@@ -206,12 +244,14 @@ func (b *EthereumRPC) InitializeMempool(addrDescForOutpoint bchain.AddrDescForOu
 
 func (b *EthereumRPC) subscribeEvents() error {
 	// subscriptions
+	glog.Error("newHeads")
 	if err := b.subscribe(func() (*rpc.ClientSubscription, error) {
+		glog.Error("invalidate previous subscription")
 		// invalidate the previous subscription - it is either the first one or there was an error
 		b.newBlockSubscription = nil
 		ctx, cancel := context.WithTimeout(context.Background(), b.timeout)
 		defer cancel()
-		sub, err := b.rpc.EthSubscribe(ctx, b.chanNewBlock, "newHeads")
+		sub, err := b.wsrpc.EthSubscribe(ctx, b.chanNewBlock, "newHeads")
 		if err != nil {
 			return nil, errors.Annotatef(err, "EthSubscribe newHeads")
 		}
@@ -222,13 +262,16 @@ func (b *EthereumRPC) subscribeEvents() error {
 		return err
 	}
 
+	glog.Error("newPendingTransactions")
 	if err := b.subscribe(func() (*rpc.ClientSubscription, error) {
+		glog.Error("invalidate previous subscription to newPendingTransactions")
 		// invalidate the previous subscription - it is either the first one or there was an error
 		b.newTxSubscription = nil
 		ctx, cancel := context.WithTimeout(context.Background(), b.timeout)
 		defer cancel()
-		sub, err := b.rpc.EthSubscribe(ctx, b.chanNewTx, "newPendingTransactions")
+		sub, err := b.wsrpc.EthSubscribe(ctx, b.chanNewTx, "newPendingTransactions")
 		if err != nil {
+			glog.Error("error newPendingTransactions")
 			return nil, errors.Annotatef(err, "EthSubscribe newPendingTransactions")
 		}
 		b.newTxSubscription = sub
@@ -243,6 +286,7 @@ func (b *EthereumRPC) subscribeEvents() error {
 
 // subscribe subscribes notification and tries to resubscribe in case of error
 func (b *EthereumRPC) subscribe(f func() (*rpc.ClientSubscription, error)) error {
+	glog.Error("subscribe")
 	s, err := f()
 	if err != nil {
 		return err
@@ -291,6 +335,9 @@ func (b *EthereumRPC) closeRPC() {
 	if b.rpc != nil {
 		b.rpc.Close()
 	}
+	if b.wsrpc != nil {
+		b.wsrpc.Close()
+	}
 }
 
 func (b *EthereumRPC) reconnectRPC() error {
@@ -302,6 +349,14 @@ func (b *EthereumRPC) reconnectRPC() error {
 	}
 	b.rpc = rc
 	b.client = ec
+
+	wsrc, wsec, wserr := openRPC(b.ChainConfig.WSURL)
+	if wserr != nil {
+		return wserr
+	}
+	b.wsrpc = wsrc
+	b.wsclient = wsec
+
 	return b.subscribeEvents()
 }
 
@@ -325,24 +380,36 @@ func (b *EthereumRPC) GetSubversion() string {
 
 // GetChainInfo returns information about the connected backend
 func (b *EthereumRPC) GetChainInfo() (*bchain.ChainInfo, error) {
+	glog.Error("GetChainInfo")
 	h, err := b.getBestHeader()
 	if err != nil {
+		glog.Error("error en getBestHeader")
 		return nil, err
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), b.timeout)
 	defer cancel()
 	id, err := b.client.NetworkID(ctx)
 	if err != nil {
+		glog.Error("error en networkId")
 		return nil, err
 	}
 	var ver string
 	if err := b.rpc.CallContext(ctx, &ver, "web3_clientVersion"); err != nil {
+		glog.Error("Error en web3_clientVersion")
 		return nil, err
 	}
+	glog.Error("bestBlock:")
+	glog.Error(h.Hash.Hex())
+	glog.Error("version:")
+	glog.Error(ver)
+	i, err2 := strconv.ParseUint(stripHex(h.Number), 16, 64)
+	if err2 != nil {
+		return nil, err2
+	}
 	rv := &bchain.ChainInfo{
-		Blocks:        int(h.Number.Int64()),
-		Bestblockhash: h.Hash().Hex(),
-		Difficulty:    h.Difficulty.String(),
+		Blocks:        int(i),
+		Bestblockhash: h.Hash.Hex(),
+		Difficulty:    h.Difficulty, //strconv.FormatUint(h.Difficulty, 10),
 		Version:       ver,
 	}
 	idi := int(id.Uint64())
@@ -354,7 +421,79 @@ func (b *EthereumRPC) GetChainInfo() (*bchain.ChainInfo, error) {
 	return rv, nil
 }
 
-func (b *EthereumRPC) getBestHeader() (*ethtypes.Header, error) {
+func toBlockNumArg(number *big.Int) string {
+	if number == nil {
+		return "latest"
+	}
+	pending := big.NewInt(-1)
+	if number.Cmp(pending) == 0 {
+		return "pending"
+	}
+	return hexutil.EncodeBig(number)
+}
+
+// StringInt create a type alias for type int
+type StringInt int
+
+func stripHex(hexaString string) string {
+	 // replace 0x or 0X with empty String
+	numberStr := strings.Replace(hexaString, "0x", "", -1)
+	numberStr = strings.Replace(numberStr, "0X", "", -1)
+	return numberStr
+}
+
+func (st *StringInt) UnmarshalJSON(b string) error {
+	glog.Error("UnmarshalJSON")
+	glog.Error(b)
+	glog.Error(stripHex(b))
+	//glog.Error(strconv.ParseInt(stripHex(b), 16, 64))
+        value, err := strconv.ParseInt(stripHex(b), 16, 64)
+	glog.Error(value)
+        if err != nil {
+            ///the string might not be of integer type
+            ///so return an error
+            return err
+
+        }
+        *st = StringInt(value)
+	return nil
+}
+
+// Header represents a block header in the RSK blockchain.
+type RSKHeader struct {
+	Hash        ethcommon.Hash    `json:"hash"`
+	ParentHash  ethcommon.Hash    `json:"parentHash"`
+	UncleHash   ethcommon.Hash    `json:"sha3Uncles"`
+	Coinbase    ethcommon.Address `json:"miner"`
+	Root        ethcommon.Hash    `json:"stateRoot"`
+	TxHash      ethcommon.Hash    `json:"transactionsRoot"`
+	ReceiptHash ethcommon.Hash    `json:"receiptsRoot"`
+	//Bloom       []byte            `json:"logsBloom"`
+	Difficulty  string            `json:"difficulty"`
+	Number      string            `json:"number"`
+	GasLimit    string            `json:"gasLimit"`
+	GasUsed     string            `json:"gasUsed"`
+	Time        string            `json:"timestamp"`
+	//Extra       []byte            `json:"extraData"`
+}
+
+// HeaderByNumber returns a RSK block header from the current canonical chain. If number is
+// nil, the latest known header is returned.
+func RSKHeaderByNumber(b *EthereumRPC, ctx context.Context, number *big.Int) (*RSKHeader, error) {
+	var head *RSKHeader
+	glog.Error("RSKHeaderByNumber, number:")
+	glog.Error(number)
+	glog.Error(toBlockNumArg(number))
+	err := b.rpc.CallContext(ctx, &head, "eth_getBlockByNumber", toBlockNumArg(number), false)
+	if err == nil && head == nil {
+		glog.Error("ethereum.NotFound")
+		err = ethereum.NotFound
+	}
+	return head, err
+}
+
+func (b *EthereumRPC) getBestHeader() (*RSKHeader, error) {
+	glog.Error("getBestHeader()")
 	b.bestHeaderLock.Lock()
 	defer b.bestHeaderLock.Unlock()
 	// if the best header was not updated for 15 minutes, there could be a subscription problem, reconnect RPC
@@ -364,71 +503,106 @@ func (b *EthereumRPC) getBestHeader() (*ethtypes.Header, error) {
 		if err != nil {
 			return nil, err
 		}
+		glog.Error("b.bestHeader en null 1")
 		b.bestHeader = nil
 	}
 	if b.bestHeader == nil {
+		glog.Error("bestHeader en null 2")
 		var err error
 		ctx, cancel := context.WithTimeout(context.Background(), b.timeout)
 		defer cancel()
-		b.bestHeader, err = b.client.HeaderByNumber(ctx, nil)
+		b.bestHeader, err = RSKHeaderByNumber(b, ctx, nil)
 		if err != nil {
+			glog.Error("bestHeader en null 3")
 			b.bestHeader = nil
 			return nil, err
 		}
+		glog.Error("b.bestHeader:")
+		glog.Error(b.bestHeader)
 		b.bestHeaderTime = time.Now()
 	}
+	glog.Error("b.bestHeader 2:")
+	//strconv.ParseInt(stripHex(b.bestHeader.Number), 16, 64)
+	glog.Error(b.bestHeader.Number)
+	glog.Error(b.bestHeader.Time)
+	glog.Error(b.bestHeader.Coinbase)
 	return b.bestHeader, nil
 }
 
 // GetBestBlockHash returns hash of the tip of the best-block-chain
 func (b *EthereumRPC) GetBestBlockHash() (string, error) {
+	glog.Error("GetBestBlockHash()")
 	h, err := b.getBestHeader()
 	if err != nil {
+		glog.Error("error en GetBestBlockHash()")
 		return "", err
 	}
-	return h.Hash().Hex(), nil
+	glog.Error("GetBestBlockHash() hash data")
+	glog.Error(h)
+	glog.Error(h.Hash)
+	glog.Error(h.Hash.Hex())
+	//return "0x8075cef9b1c859c54d579e20ef3af3bd10e8dde02f1db42154a41e734591e5d1", nil
+	return h.Hash.Hex(), nil
 }
 
 // GetBestBlockHeight returns height of the tip of the best-block-chain
 func (b *EthereumRPC) GetBestBlockHeight() (uint32, error) {
+	glog.Error("GetBestBlockHeight()")
 	h, err := b.getBestHeader()
 	if err != nil {
+		glog.Error("error GetBestBlockHeight()")
 		return 0, err
 	}
-	return uint32(h.Number.Uint64()), nil
+
+	i, err2 := strconv.ParseUint(stripHex(h.Number), 16, 64)
+	if err2 != nil {
+		return 0, err2
+	}
+
+	return uint32(i), nil
 }
 
 // GetBlockHash returns hash of block in best-block-chain at given height
 func (b *EthereumRPC) GetBlockHash(height uint32) (string, error) {
+	glog.Error("GetBlockHash()")
 	var n big.Int
 	n.SetUint64(uint64(height))
 	ctx, cancel := context.WithTimeout(context.Background(), b.timeout)
 	defer cancel()
-	h, err := b.client.HeaderByNumber(ctx, &n)
+	h, err := RSKHeaderByNumber(b, ctx, &n)
 	if err != nil {
+		glog.Error("error en GetBlockHash()")
 		if err == ethereum.NotFound {
+			glog.Error("error ethereum.NotFound")
 			return "", bchain.ErrBlockNotFound
 		}
 		return "", errors.Annotatef(err, "height %v", height)
 	}
-	return h.Hash().Hex(), nil
+	glog.Error("Hash:")
+	glog.Error(h.Hash.Hex())
+	return h.Hash.Hex(), nil
 }
 
 func (b *EthereumRPC) ethHeaderToBlockHeader(h *rpcHeader) (*bchain.BlockHeader, error) {
+	glog.Error("ethHeaderToBlockHeader")
 	height, err := ethNumber(h.Number)
 	if err != nil {
+		glog.Error("ethHeaderToBlockHeader error 1")
 		return nil, err
 	}
 	c, err := b.computeConfirmations(uint64(height))
 	if err != nil {
+		glog.Error("ehtbh error 2")
 		return nil, err
 	}
 	time, err := ethNumber(h.Time)
 	if err != nil {
+		glog.Error("ehtbh error 3")
 		return nil, err
 	}
 	size, err := ethNumber(h.Size)
 	if err != nil {
+		glog.Error("ehtbh error 4")
 		return nil, err
 	}
 	return &bchain.BlockHeader{
@@ -459,28 +633,45 @@ func (b *EthereumRPC) computeConfirmations(n uint64) (uint32, error) {
 	if err != nil {
 		return 0, err
 	}
-	bn := bh.Number.Uint64()
+	bn := bh.Number
+	glog.Error("bn:")
+	glog.Error(bn)
 	// transaction in the best block has 1 confirmation
-	return uint32(bn - n + 1), nil
+	i, err2 := strconv.ParseUint(stripHex(bn), 16, 64)
+	if err2 != nil {
+		return 0, err2
+	}
+	return uint32(i - n + 1), nil
 }
 
 func (b *EthereumRPC) getBlockRaw(hash string, height uint32, fullTxs bool) (json.RawMessage, error) {
+	glog.Error("getBlockRaw")
 	ctx, cancel := context.WithTimeout(context.Background(), b.timeout)
 	defer cancel()
 	var raw json.RawMessage
 	var err error
 	if hash != "" {
 		if hash == "pending" {
+			glog.Error("eth_getBlockByNumber 1")
+			glog.Error(hash)
 			err = b.rpc.CallContext(ctx, &raw, "eth_getBlockByNumber", hash, fullTxs)
 		} else {
+			glog.Error("eth_getBlockByHash")
+			glog.Error(ethcommon.HexToHash(hash))
 			err = b.rpc.CallContext(ctx, &raw, "eth_getBlockByHash", ethcommon.HexToHash(hash), fullTxs)
 		}
 	} else {
+		glog.Error("eth_getBlockByNumber 2")
+		glog.Error(height)
 		err = b.rpc.CallContext(ctx, &raw, "eth_getBlockByNumber", fmt.Sprintf("%#x", height), fullTxs)
 	}
 	if err != nil {
+		glog.Error("Error 1 en getBlockRaw")
+		glog.Error(err)
 		return nil, errors.Annotatef(err, "hash %v, height %v", hash, height)
 	} else if len(raw) == 0 {
+		glog.Error("Error 2 en getBlockRaw")
+		glog.Error("ErrBlockNotFound")
 		return nil, bchain.ErrBlockNotFound
 	}
 	return raw, nil
@@ -490,54 +681,83 @@ func (b *EthereumRPC) getERC20EventsForBlock(blockNumber string) (map[string][]*
 	ctx, cancel := context.WithTimeout(context.Background(), b.timeout)
 	defer cancel()
 	var logs []rpcLogWithTxHash
+	glog.Error("getERC20Events fromBlock/toBlock:")
+	glog.Error(blockNumber)
 	err := b.rpc.CallContext(ctx, &logs, "eth_getLogs", map[string]interface{}{
 		"fromBlock": blockNumber,
 		"toBlock":   blockNumber,
 		"topics":    []string{erc20TransferEventSignature},
 	})
+	//blockNumber = "0x2c69c4"
 	if err != nil {
+		glog.Error("getERC20Events error:")
+		glog.Error(err)
 		return nil, errors.Annotatef(err, "blockNumber %v", blockNumber)
 	}
+	glog.Error("Mapping events")
 	r := make(map[string][]*rpcLog)
 	for i := range logs {
+		glog.Error("Log:")
 		l := &logs[i]
+		glog.Error(l.Hash)
 		r[l.Hash] = append(r[l.Hash], &l.rpcLog)
 	}
+	glog.Error("Mapping result:")
+	glog.Error(r)
 	return r, nil
 }
 
 // GetBlock returns block with given hash or height, hash has precedence if both passed
 func (b *EthereumRPC) GetBlock(hash string, height uint32) (*bchain.Block, error) {
+	//height = 3369482
+	//hash = "0x15c6838e384d348a5eeebffd2e66df06b31abb153134b671dc6a28b7155369ec"
+	glog.Error("GetBlock")
+	glog.Error(hash)
+	glog.Error(height)
 	raw, err := b.getBlockRaw(hash, height, true)
+	glog.Error("Raw:")
+	glog.Error(raw)
 	if err != nil {
 		return nil, err
 	}
 	var head rpcHeader
 	if err := json.Unmarshal(raw, &head); err != nil {
+		glog.Error("Error 1")
 		return nil, errors.Annotatef(err, "hash %v, height %v", hash, height)
 	}
 	var body rpcBlockTransactions
 	if err := json.Unmarshal(raw, &body); err != nil {
+		glog.Error("Error 2")
 		return nil, errors.Annotatef(err, "hash %v, height %v", hash, height)
 	}
 	bbh, err := b.ethHeaderToBlockHeader(&head)
 	if err != nil {
+		glog.Error("Error 3")
 		return nil, errors.Annotatef(err, "hash %v, height %v", hash, height)
 	}
 	// get ERC20 events
 	logs, err := b.getERC20EventsForBlock(head.Number)
 	if err != nil {
+		glog.Error("Error 4")
 		return nil, err
 	}
+	glog.Error("Transactions")
 	btxs := make([]bchain.Tx, len(body.Transactions))
+	glog.Error(btxs)
 	for i := range body.Transactions {
 		tx := &body.Transactions[i]
+		glog.Error("Parsing tx with hash:")
+		glog.Error(tx.Hash)
 		btx, err := b.Parser.ethTxToTx(tx, &rpcReceipt{Logs: logs[tx.Hash]}, bbh.Time, uint32(bbh.Confirmations), true)
+		glog.Error("Parsing result:")
+		glog.Error(btx)
 		if err != nil {
+			glog.Error("Error 5")
 			return nil, errors.Annotatef(err, "hash %v, height %v, txid %v", hash, height, tx.Hash)
 		}
 		btxs[i] = *btx
 		if b.mempoolInitialized {
+			glog.Error("Removing tx from mempool")
 			b.Mempool.RemoveTransactionFromMempool(tx.Hash)
 		}
 	}
@@ -545,6 +765,7 @@ func (b *EthereumRPC) GetBlock(hash string, height uint32) (*bchain.Block, error
 		BlockHeader: *bbh,
 		Txs:         btxs,
 	}
+	glog.Error("Returning block")
 	return &bbk, nil
 }
 
@@ -557,13 +778,16 @@ func (b *EthereumRPC) GetBlockInfo(hash string) (*bchain.BlockInfo, error) {
 	var head rpcHeader
 	var txs rpcBlockTxids
 	if err := json.Unmarshal(raw, &head); err != nil {
+		glog.Error("Error 6")
 		return nil, errors.Annotatef(err, "hash %v", hash)
 	}
 	if err = json.Unmarshal(raw, &txs); err != nil {
+		glog.Error("Error 7")
 		return nil, err
 	}
 	bch, err := b.ethHeaderToBlockHeader(&head)
 	if err != nil {
+		glog.Error("Error 8")
 		return nil, err
 	}
 	return &bchain.BlockInfo{
