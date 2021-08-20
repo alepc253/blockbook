@@ -25,7 +25,7 @@
     "version": "3.0.0",
     "binary_url": "https://github.com/rsksmart/rskj/releases/download/IRIS-3.0.0/rskj-core-3.0.0-IRIS-all.jar",
     "verification_type": "sha256",
-    "verification_source": "f7cb1e6c5568332d047c602a5b2c464c41688336b824d92ef3a40b89a8f55b60",
+    "verification_source": "8c975d8489599dbe551e90f96b450ec8a2589385c3176e4ce6ced9d44b09782b",
     "extract_command": "sh -c 'cp \"$$1\" backend/' fake-extract",
     "exclude_files": [],
     "exec_command_template": "/bin/sh -c 'java -Xmx4G -Xms1024m -Ddatabase.dir={{.Env.BackendDataPath}}/{{.Coin.Alias}}/backend -Drpc.providers.web.http.port={{.Ports.BackendRPC}} -Drpc.providers.web.ws.enabled=true  -Drpc.providers.web.ws.port=4445 -Drpc.providers.web.cors=\"*\" -Dlogback.configurationFile=~/backend/logback.xml -cp {{.Env.BackendInstallPath}}/{{.Coin.Alias}}/rskj-core-3.0.0-IRIS-all.jar co.rsk.Start 2>>{{.Env.BackendDataPath}}/{{.Coin.Alias}}/backend/{{.Coin.Alias}}.log'",
